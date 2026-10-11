@@ -1,0 +1,35 @@
+name: Black Hole Live Stream
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */5 * * *"
+
+concurrency:
+  group: blackhole-live
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  stream:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ffmpeg
+        run: sudo apt-get update -y && sudo apt-get install -y ffmpeg
+      - name: Get the rendered loop
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VIDEO_URL: ${{ secrets.VIDEO_URL }}     # optional: direct .mp4 link instead of the release asset
+        run: |
+          if [ -n "$VIDEO_URL" ]; then curl -L -o blackhole_loop.mp4 "$VIDEO_URL";
+          else gh release download blackhole-loop -p blackhole_loop.mp4 --clobber; fi
+          ls -la blackhole_loop.mp4
+      - name: Stream to YouTube
+        env:
+          RTMP_URL: ${{ secrets.YOUTUBE_RTMP_URL }}
+          AUDIO_URL: ${{ secrets.AUDIO_URL }}     # optional looped background audio (http/https link)
+        run: timeout 20400 bash ./stream_loop.sh blackhole_loop.mp4 || [ $? -eq 124 ]

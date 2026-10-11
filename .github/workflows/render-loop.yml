@@ -1,0 +1,77 @@
+name: Render Black Hole loop
+
+# Renders the black-hole scene (software WebGL, no GPU) into a seamless 120 s MP4 loop.
+# The loop is split into shards that render in parallel, then joined and published
+# as a release asset. Typical total time: ~40-70 min.
+on:
+  workflow_dispatch:
+    inputs:
+      preset:
+        description: "Black hole: sgra (Sagittarius A*) or m87 (M87*)"
+        default: "sgra"
+      quality:
+        description: "low | med | high (high is slower)"
+        default: "med"
+
+permissions:
+  contents: write
+
+jobs:
+  shards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: true
+      max-parallel: 20
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39]   # 40 shards x 90 frames = 3600 frames
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+          pip install playwright
+          playwright install --with-deps chromium
+      - name: Render shard ${{ matrix.shard }}
+        run: |
+          python render_loop.py --out part_$(printf '%03d' ${{ matrix.shard }}).mp4 \
+            --first $(( ${{ matrix.shard }} * 90 )) --count 90 \
+            --quality "${{ github.event.inputs.quality || 'med' }}" \
+            --preset "${{ github.event.inputs.preset || 'sgra' }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: part-${{ matrix.shard }}
+          path: part_*.mp4
+          retention-days: 1
+
+  join:
+    needs: shards
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ffmpeg
+        run: sudo apt-get update -y && sudo apt-get install -y ffmpeg
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: part-*
+          path: parts
+          merge-multiple: true
+      - name: Join shards
+        run: |
+          ls parts | sort > /dev/null
+          for f in $(ls parts/part_*.mp4 | sort); do echo "file '$PWD/$f'"; done > list.txt
+          test "$(wc -l < list.txt)" -eq 40
+          ffmpeg -hide_banner -loglevel warning -y -f concat -safe 0 -i list.txt -c copy -movflags +faststart blackhole_loop.mp4
+          ffprobe -v error -show_entries format=duration -of csv=p=0 blackhole_loop.mp4
+      - name: Publish to release "blackhole-loop"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view blackhole-loop >/dev/null 2>&1 || gh release create blackhole-loop --title "Black hole loop" --notes "Pre-rendered black hole loop"
+          gh release upload blackhole-loop blackhole_loop.mp4 --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blackhole_loop
+          path: blackhole_loop.mp4
